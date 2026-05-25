@@ -1,0 +1,425 @@
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ColorTok - 無限カラースクロール</title>
+    <!-- Tailwind CSS (Aesthetics & Layout) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* タッチデバイスでのスクロール挙動の最適化 */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        /* スナップスクロールの設定 */
+        .tiktok-container {
+            width: 100%;
+            height: 100%;
+            overflow-y: scroll;
+            scroll-snap-type: y mandatory;
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch; /* iOSでの滑らかなスクロール */
+            scrollbar-width: none; /* Firefox用スクロールバー非表示 */
+        }
+
+        .tiktok-container::-webkit-scrollbar {
+            display: none; /* Chrome, Safari用スクロールバー非表示 */
+        }
+
+        .tiktok-slide {
+            width: 100%;
+            height: 100%;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* ハート出現アニメーション */
+        @keyframes heartPop {
+            0% {
+                transform: scale(0) rotate(-15deg);
+                opacity: 0;
+            }
+            15% {
+                transform: scale(1.2) rotate(10deg);
+                opacity: 0.9;
+            }
+            80% {
+                transform: scale(1) rotate(-5deg);
+                opacity: 0.9;
+            }
+            100% {
+                transform: scale(1.5) translateY(-80px) rotate(15deg);
+                opacity: 0;
+            }
+        }
+
+        .heart-bubble {
+            position: absolute;
+            color: #ff2b56;
+            animation: heartPop 0.8s ease-out forwards;
+            pointer-events: none;
+            z-index: 50;
+            filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.4));
+        }
+    </style>
+</head>
+<body class="text-white select-none">
+
+    <!-- メインスクロールコンテナ -->
+    <div id="app-container" class="tiktok-container">
+        <!-- JavaScriptでここにスライドが動的に追加されます -->
+    </div>
+
+    <!-- お気に入り一覧モーダル -->
+    <div id="favorites-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-zinc-900 border border-zinc-800 w-11/12 max-w-md rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold flex items-center gap-2">
+                    <i data-lucide="heart" class="text-rose-500 fill-rose-500 w-5 h-5"></i>
+                    保存したカラー
+                </h3>
+                <button onclick="toggleFavoritesModal()" class="p-2 hover:bg-zinc-800 rounded-full">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div id="favorites-list" class="max-h-80 overflow-y-auto space-y-3 pr-2">
+                <!-- お気に入りアイテムがここに入ります -->
+                <p class="text-zinc-500 text-center py-8">保存されたカラーはまだありません</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- コピー通知トースト -->
+    <div id="toast" class="fixed top-8 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/20 text-white px-6 py-3 rounded-full text-sm font-semibold tracking-wide shadow-xl z-50 pointer-events-none opacity-0 transform translate-y-[-20px] transition-all duration-300 flex items-center gap-2">
+        <i data-lucide="check-circle" class="text-emerald-400 w-4 h-4"></i>
+        <span id="toast-text">カラーコードをコピーしました！</span>
+    </div>
+
+    <script>
+        const container = document.getElementById('app-container');
+        const favoritesModal = document.getElementById('favorites-modal');
+        const favoritesList = document.getElementById('favorites-list');
+        const toast = document.getElementById('toast');
+        const toastText = document.getElementById('toast-text');
+
+        let savedColors = [];
+        let slideCount = 0;
+        let lastTap = 0; // ダブルタップ検出用
+
+        // ランダムカラー生成 (単色 または グラデーション)
+        function generateRandomColorData() {
+            const letters = '0123456789ABCDEF';
+            const getRandomHex = () => {
+                let color = '#';
+                for (let i = 0; i < 6; i++) {
+                    color += letters[Math.floor(Math.random() * 16)];
+                }
+                return color;
+            };
+
+            const isGradient = Math.random() > 0.4; // 60%の確率でグラデーション
+            if (isGradient) {
+                const color1 = getRandomHex();
+                const color2 = getRandomHex();
+                const angle = Math.floor(Math.random() * 360);
+                return {
+                    style: `linear-gradient(${angle}deg, ${color1}, ${color2})`,
+                    display: `${color1} ➜ ${color2}`,
+                    primary: color1,
+                    secondary: color2,
+                    isGradient: true
+                };
+            } else {
+                const color = getRandomHex();
+                return {
+                    style: color,
+                    display: color,
+                    primary: color,
+                    secondary: null,
+                    isGradient: false
+                };
+            }
+        }
+
+        // 新しいTikTok風スライドを作成
+        function createSlide() {
+            const colorData = generateRandomColorData();
+            const slideId = `slide-${slideCount++}`;
+            
+            const slide = document.createElement('div');
+            slide.className = 'tiktok-slide';
+            slide.id = slideId;
+            slide.style.background = colorData.style;
+            slide.dataset.primary = colorData.primary;
+            slide.dataset.style = colorData.style;
+            slide.dataset.display = colorData.display;
+
+            // 各スライドの内部UI構造 (右側ボタン、下部情報)
+            slide.innerHTML = `
+                <!-- 中央のメインカラー表示 -->
+                <div class="text-center px-6 z-10 pointer-events-none drop-shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
+                    <p class="text-xs uppercase tracking-widest opacity-80 mb-2 font-mono">COLOR NO. ${slideCount}</p>
+                    <h1 class="text-3xl md:text-5xl font-black tracking-wider mb-4 font-mono select-all pointer-events-auto cursor-pointer active:scale-95 transition-transform" onclick="copyText('${colorData.display}')">
+                        ${colorData.display}
+                    </h1>
+                    <p class="text-sm bg-black/30 backdrop-blur-sm inline-block px-4 py-2 rounded-full font-medium">
+                        ${colorData.isGradient ? '🌈 グラデーション' : '🎨 単色カラー'}
+                    </p>
+                </div>
+
+                <!-- 右側のアクションボタンエリア (TikTok風) -->
+                <div class="absolute right-4 bottom-24 flex flex-col items-center gap-6 z-20">
+                    <!-- アバター -->
+                    <div class="w-12 h-12 rounded-full border-2 border-white overflow-hidden bg-black flex items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer" onclick="showToast('スワイプして次の色を見つけよう！')">
+                        <span class="font-black text-sm text-transparent bg-clip-text bg-gradient-to-tr from-pink-500 to-yellow-500">🎨</span>
+                    </div>
+
+                    <!-- いいね(ハート)ボタン -->
+                    <button onclick="toggleLike('${slideId}', event)" class="flex flex-col items-center group">
+                        <div class="w-12 h-12 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-75 transition-transform">
+                            <i data-lucide="heart" class="w-6 h-6 transition-colors duration-200" id="heart-icon-${slideId}"></i>
+                        </div>
+                        <span class="text-xs mt-1 font-semibold" id="like-count-${slideId}">1.2k</span>
+                    </button>
+
+                    <!-- コピーボタン -->
+                    <button onclick="copyText('${colorData.display}', event)" class="flex flex-col items-center">
+                        <div class="w-12 h-12 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-75 transition-transform">
+                            <i data-lucide="copy" class="w-6 h-6"></i>
+                        </div>
+                        <span class="text-xs mt-1 font-semibold">コピー</span>
+                    </button>
+
+                    <!-- お気に入り一覧表示ボタン -->
+                    <button onclick="toggleFavoritesModal(event)" class="flex flex-col items-center">
+                        <div class="w-12 h-12 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-75 transition-transform">
+                            <i data-lucide="folder-heart" class="w-6 h-6 text-yellow-400"></i>
+                        </div>
+                        <span class="text-xs mt-1 font-semibold">保存箱</span>
+                    </button>
+                </div>
+
+                <!-- 左下のクリエイター詳細・キャプションエリア -->
+                <div class="absolute left-4 bottom-8 right-20 z-10 drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
+                    <h3 class="font-bold text-lg flex items-center gap-2">
+                        @color_scroll 
+                        <span class="bg-blue-500 text-[10px] px-1.5 py-0.5 rounded-full flex items-center">✓</span>
+                    </h3>
+                    <p class="text-sm mt-2 font-light line-clamp-2">
+                        画面をダブルタップしていいね！❤️ お気に入りの色を見つけたら右側の保存箱にキープできます。
+                    </p>
+                    <div class="flex items-center gap-2 mt-3 text-xs bg-white/10 backdrop-blur-sm py-1.5 px-3 rounded-full w-max max-w-full">
+                        <i data-lucide="music" class="w-3.5 h-3.5 animate-spin" style="animation-duration: 6s;"></i>
+                        <span class="truncate font-mono">BGM: ${colorData.primary} (Original Mix)</span>
+                    </div>
+                </div>
+
+                <!-- バックグラウンドダブルタップ用オーバーレイ -->
+                <div class="absolute inset-0 z-0" onclick="handleTap(event, '${slideId}')"></div>
+            `;
+
+            container.appendChild(slide);
+            lucide.createIcons();
+            
+            // 初期のいいね数をランダム設定
+            document.getElementById(`like-count-${slideId}`).innerText = (Math.random() * 10 + 1).toFixed(1) + 'k';
+        }
+
+        // 初期ロード時に5枚生成
+        for (let i = 0; i < 5; i++) {
+            createSlide();
+        }
+
+        // 無限スクロール検知
+        container.addEventListener('scroll', () => {
+            const currentScroll = container.scrollTop;
+            const maxScroll = container.scrollHeight - container.clientHeight;
+            
+            // 残り1スライド分以下になったら自動生成
+            if (maxScroll - currentScroll <= container.clientHeight * 1.5) {
+                createSlide();
+            }
+        });
+
+        // ダブルタップでいいね検出
+        function handleTap(e, slideId) {
+            const currentTime = new Date().getTime();
+            const tapLength = currentTime - lastTap;
+            
+            if (tapLength < 300 && tapLength > 0) {
+                // ダブルタップ成立
+                spawnHeart(e);
+                likeSlide(slideId);
+                e.preventDefault();
+            }
+            lastTap = currentTime;
+        }
+
+        // いいねアクション
+        function toggleLike(slideId, event) {
+            if (event) event.stopPropagation();
+            likeSlide(slideId);
+        }
+
+        function likeSlide(slideId) {
+            const heartIcon = document.getElementById(`heart-icon-${slideId}`);
+            const likeCountEl = document.getElementById(`like-count-${slideId}`);
+            const slideEl = document.getElementById(slideId);
+            
+            if (!slideEl) return;
+            
+            const colorStyle = slideEl.dataset.style;
+            const colorDisplay = slideEl.dataset.display;
+
+            if (heartIcon.classList.contains('fill-rose-500')) {
+                // いいね解除
+                heartIcon.classList.remove('fill-rose-500', 'text-rose-500');
+                heartIcon.classList.add('text-white');
+                
+                // お気に入りから削除
+                savedColors = savedColors.filter(item => item.display !== colorDisplay);
+                showToast("保存を取り消しました");
+            } else {
+                // いいね登録
+                heartIcon.classList.add('fill-rose-500', 'text-rose-500');
+                heartIcon.classList.remove('text-white');
+
+                // お気に入りへ追加
+                if (!savedColors.some(item => item.display === colorDisplay)) {
+                    savedColors.push({ style: colorStyle, display: colorDisplay });
+                }
+                showToast("カラーを保存しました！");
+            }
+        }
+
+        // 画面上にハートエフェクトを生成
+        function spawnHeart(e) {
+            const heart = document.createElement('div');
+            heart.className = 'heart-bubble';
+            heart.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-20 h-20"><path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" /></svg>';
+            
+            // タップされた座標
+            const x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : window.innerWidth / 2);
+            const y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : window.innerHeight / 2);
+            
+            heart.style.left = `${x - 40}px`;
+            heart.style.top = `${y - 40}px`;
+            
+            document.body.appendChild(heart);
+            
+            setTimeout(() => {
+                heart.remove();
+            }, 800);
+        }
+
+        // コピー処理
+        function copyText(text, event) {
+            if (event) event.stopPropagation();
+            
+            const tempInput = document.createElement('input');
+            tempInput.value = text;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+
+            showToast(`コピー完了: ${text}`);
+        }
+
+        // トースト通知を表示
+        function showToast(message) {
+            toastText.innerText = message;
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0) translate(-50%, 0)';
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-20px) translate(-50%, 0)';
+            }, 2000);
+        }
+
+        // お気に入りモーダルの表示切り替え
+        function toggleFavoritesModal(event) {
+            if (event) event.stopPropagation();
+            if (favoritesModal.classList.contains('hidden')) {
+                renderFavorites();
+                favoritesModal.classList.remove('hidden');
+                setTimeout(() => {
+                    favoritesModal.classList.remove('opacity-0');
+                }, 10);
+            } else {
+                favoritesModal.classList.add('opacity-0');
+                setTimeout(() => {
+                    favoritesModal.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+        // お気に入りリストの表示
+        function renderFavorites() {
+            favoritesList.innerHTML = '';
+            if (savedColors.length === 0) {
+                favoritesList.innerHTML = '<p class="text-zinc-500 text-center py-8">保存されたカラーはまだありません</p>';
+                return;
+            }
+
+            savedColors.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-2xl border border-zinc-700/50 transition-colors';
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl border border-zinc-700 shadow-inner" style="background: ${item.style}"></div>
+                        <span class="font-mono text-sm font-semibold">${item.display}</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="copyText('${item.display}', event)" class="p-2 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg text-zinc-300 hover:text-white transition-colors" title="コピー">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="deleteFavorite(${index}, event)" class="p-2 bg-zinc-700/50 hover:bg-zinc-700 rounded-lg text-rose-400 hover:text-rose-500 transition-colors" title="削除">
+                            <i data-lucide="trash" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                favoritesList.appendChild(div);
+            });
+            lucide.createIcons();
+        }
+
+        // お気に入り個別削除
+        function deleteFavorite(index, event) {
+            if (event) event.stopPropagation();
+            const removed = savedColors.splice(index, 1)[0];
+            renderFavorites();
+            showToast("削除しました");
+            
+            // メイン画面のハートマークの状態を更新
+            const slides = document.querySelectorAll('.tiktok-slide');
+            slides.forEach(slide => {
+                if (slide.dataset.display === removed.display) {
+                    const heartIcon = document.getElementById(`heart-icon-${slide.id}`);
+                    if (heartIcon) {
+                        heartIcon.classList.remove('fill-rose-500', 'text-rose-500');
+                        heartIcon.classList.add('text-white');
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+
+```
